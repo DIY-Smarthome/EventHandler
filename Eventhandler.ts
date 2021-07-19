@@ -20,6 +20,10 @@ export default class Eventhandler {
 	}
 
 	static request<T>(eventName: string, ...args: any[]): Promise<T> {
+		return this.requestCustomTimeout(eventName, Eventhandler.requestTimeout, ...args);
+	}
+
+	static requestCustomTimeout<T>(eventName: string, timeout:number, ...args: any[]): Promise<T> {
 		var promise = new Promise<T>(async (resolve, reject) => {
 			const curCounter = Eventhandler.counter++;
 			var resolved = false;
@@ -32,7 +36,7 @@ export default class Eventhandler {
 			}
 			this.emitter.on(eventName + ":Result", func);
 			this.emitter.emit(eventName, curCounter, ...args);
-			await sleep(Eventhandler.requestTimeout);
+			await sleep(timeout);
 			if (resolved) return;
 			this.emitter.off(eventName + ":Result", func);
 			reject(null);
