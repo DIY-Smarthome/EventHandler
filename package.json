@@ -1,0 +1,25 @@
+{
+  "name": "diy-smarthome-eventhandler",
+  "version": "1.0.0",
+  "description": "Eventhandler for the DIY-Smarthome cosmos",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DIY-Smarthome/EventHandler.git"
+  },
+  "keywords": [
+    "Smarthome"
+  ],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/DIY-Smarthome/EventHandler/issues"
+  },
+  "homepage": "https://github.com/DIY-Smarthome/EventHandler#readme",
+  "devDependencies": {
+    "typescript": "^4.5.5"
+  }
+}
