@@ -4,7 +4,8 @@
   "description": "Eventhandler for the DIY-Smarthome cosmos",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "npm run build-ts",
+    "build-ts": "tsc --build tsconfig.json"
   },
   "repository": {
     "type": "git",
