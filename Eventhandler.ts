@@ -1,10 +1,10 @@
 import * as https from 'http';
-import Delegate from '../Delegate/Delegate';
-import { DetailedStatus } from '../enums/DetailedStatus';
-import { LogLevel } from '../enums/LogLevel';
-import { Eventdata } from '../interfaces/Eventdata';
-import { Response } from '../interfaces/Response';
-import { ResponseArray } from '../interfaces/ResponseArray';
+import Delegate from './Utils/Delegate/Delegate';
+import { DetailedStatus } from './Utils/enums/DetailedStatus';
+import { LogLevel } from './Utils/enums/LogLevel';
+import { Eventdata } from './Utils/interfaces/Eventdata';
+import { Response } from './Utils/interfaces/Response';
+import { ResponseArray } from './Utils/interfaces/ResponseArray';
 
 
 export default class EventHandler {
