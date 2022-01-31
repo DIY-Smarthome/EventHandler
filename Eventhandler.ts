@@ -22,6 +22,7 @@ export default class EventHandler {
 	disposed = false;
 	
 	static shutdownEvent = "control/shutdown";
+	private static instance = null;
 	/**
 	 * Creates a new, not initialized, instance of an EventHandler
 	 * @see {@link init} for initializing
@@ -51,6 +52,8 @@ export default class EventHandler {
 				process.exit(code); //Do not prevent any kind of user induced shutdown 
 			});//Arrow function to preserve class context
 		})
+
+		EventHandler.instance = this;
 
 		return new Promise<void>((resolve)=>{ // Init server for incoming messages
 			this.request("kernel/init").then((resp: ResponseArray) => {
@@ -265,5 +268,9 @@ export default class EventHandler {
 			//End request
 			req.end();
 		});
+	}
+
+	static getInstance() {
+		return EventHandler.instance;
 	}
 }
