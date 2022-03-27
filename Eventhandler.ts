@@ -1,4 +1,5 @@
-import * as https from 'http';
+import * as peer from 'noise-peer';
+import * as net from 'net'; 
 import Delegate from './Utils/Delegate/Delegate';
 import { DetailedStatus } from './Utils/enums/DetailedStatus';
 import { LogLevel } from './Utils/enums/LogLevel';
@@ -15,8 +16,7 @@ export default class EventHandler {
 	private kernelHostname: string;
 	private kernelPort: number;
 
-	private server:https.Server;
-	private port: number;
+	private secStream;
 	private logLevel: LogLevel;
 
 	disposed = false;
@@ -55,36 +55,35 @@ export default class EventHandler {
 
 		EventHandler.instance = this;
 
-		return new Promise<void>((resolve)=>{ // Init server for incoming messages
-			this.request("kernel/init").then((resp: ResponseArray) => {
-				this.port = <number> resp[0].content;
-				this.modulename = this.modulename ?? resp[0].content.toString();
-				this.server = https.createServer({}, (req, res) => {
-					let body = '';
-					req.on('data', chunk => { //convert chunk buffers to string
-						body += chunk.toString();
-					});
-					req.on('end', async () => { //process finished data
-						const data: Eventdata = JSON.parse(body);
-						body = ""; //reset body
-						const eventname = req.url.substring(1);							
-
-						if (!this.bindings.has(eventname)) //if there is no event, don't process
-							return;
-						const [results, unfinished] = await this.bindings.get(eventname).invokeAsync(data.timeout, data.payload); //invoke subscribed functions
-						const processedResults: Response = { //pack results
-							modulename: this.modulename,
-							statuscode: unfinished==0?200:207,
-							detailedstatus: unfinished==0? "" : DetailedStatus.PARTIAL_TIMEOUT+"|"+unfinished,
-							content: results
-						}
-						res.write(JSON.stringify(processedResults)); //return results
-						res.statusCode = 200;
-						res.end();
-					});
-				}).listen(this.port);
-				this.disposed = false;
-				resolve();
+		return new Promise<void>((resolve)=>{ // Init client for incoming messages
+			var stream = net.connect(this.kernelPort, this.kernelHostname);
+			this.secStream = peer(stream, true);
+			this.secStream.write({ 
+				modulename: this.modulename,
+				eventname: "kernel/init",
+				timeout: this.requestTimeout,
+				payload: {}
+			});
+			this.secStream.end();
+			let body = '';
+			this.secStream.on('data', chunk => { //convert chunk buffers to string
+				body += chunk.toString();
+			});
+			this.secStream.on('end', async () => { //process finished data
+				const data: Eventdata = JSON.parse(body);
+				body = ""; //reset body
+				const eventname = data.eventname;						
+				if (!this.bindings.has(eventname)) //if there is no event, don't process
+					return;
+				const [results, unfinished] = await this.bindings.get(eventname).invokeAsync(data.timeout, data.payload); //invoke subscribed functions
+				const processedResults: Response = { //pack results
+					modulename: this.modulename,
+					statuscode: unfinished==0?200:207,
+					detailedstatus: unfinished==0? "" : DetailedStatus.PARTIAL_TIMEOUT+"|"+unfinished,
+					content: results
+				}
+				this.secStream.write(JSON.stringify(processedResults)); //return results
+				this.secStream.end();
 			});
 		})
 	}
@@ -108,7 +107,6 @@ export default class EventHandler {
 	 */
 	requestCustomTimeout(eventname: string, timeout: number, payload: unknown = {}): Promise<ResponseArray> {
 		return this.doRequest(this.kernelHostname, this.kernelPort, eventname, "POST", {}, {
-			port: this.port,
 			modulename: this.modulename,
 			timeout: timeout,
 			payload: payload
@@ -124,7 +122,6 @@ export default class EventHandler {
 	 */
 	private requestInternal(eventname: string, timeout: number, payload: unknown = {}): Promise<ResponseArray>{
 		return this.doRequest(this.kernelHostname, this.kernelPort, eventname, "POST", {}, {
-			port: this.port,
 			modulename: this.modulename,
 			timeout: timeout,
 			payload: payload
@@ -179,21 +176,13 @@ export default class EventHandler {
 		[`beforeExit`, `SIGINT`, `SIGUSR1`, `SIGUSR2`, `uncaughtException`, `SIGTERM`].forEach((eventType) => { //remove listeners to allow the process to stop
 			process.off(eventType, () => this.dispose);//Arrow function to preserve class context
 		})
-		this.server.close(); //Close server for incoming messages
+		this.secStream.close(); //Close server for incoming messages
 		this.bindings.clear(); //Remove all bindings
 		try {
 			await this.request("kernel/dispose"); //Notify kernel of dispose
 		} catch (e) {
 			console.error(e); 
 		}
-	}
-
-	/**
-	 * Get the port this EventHandler is listening on
-	 * @returns Port
-	 */
-	getPort(): number{
-		return this.port;
 	}
 
 	/**
