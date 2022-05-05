@@ -22,5 +22,8 @@
   "homepage": "https://github.com/DIY-Smarthome/EventHandler#readme",
   "devDependencies": {
     "typescript": "^4.5.5"
+  },
+  "dependencies": {
+    "noise-peer": "^2.1.1"
   }
 }

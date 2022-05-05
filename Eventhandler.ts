@@ -77,6 +77,7 @@ export default class EventHandler {
 					return;
 				const [results, unfinished] = await this.bindings.get(eventname).invokeAsync(data.timeout, data.payload); //invoke subscribed functions
 				const processedResults: Response = { //pack results
+					id: data.id,
 					modulename: this.modulename,
 					statuscode: unfinished==0?200:207,
 					detailedstatus: unfinished==0? "" : DetailedStatus.PARTIAL_TIMEOUT+"|"+unfinished,
