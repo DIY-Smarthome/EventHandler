@@ -1,5 +1,7 @@
-import * as peer from 'noise-peer';
-import * as net from 'net'; 
+import * as net from 'net';
+import peer from 'noise-peer';
+import { v4 as getUUID } from 'uuid';
+
 import Delegate from './Utils/Delegate/Delegate';
 import { DetailedStatus } from './Utils/enums/DetailedStatus';
 import { LogLevel } from './Utils/enums/LogLevel';
@@ -13,12 +15,14 @@ export default class EventHandler {
 	private requestTimeout: number;
 	private bindings: Map<string, Delegate<(...args) => unknown>> = new Map();
 
-	private kernelHostname: string;
+	/*private kernelHostname: string;*/
 	private kernelPort: number;
 
-	private secStream;
+	private secStream: peer.NoisePeer;
 	private logLevel: LogLevel;
 
+	private pendingMessages: Map<string, (value: ResponseArray | PromiseLike<ResponseArray>) => void>;
+	
 	disposed = false;
 	
 	static shutdownEvent = "control/shutdown";
@@ -32,12 +36,13 @@ export default class EventHandler {
 	 * @param requestTimeout optional - timeout in milliseconds
 	 * @param logLevel optional - provide a custom loglevel
 	 */
-	constructor(kernelhost: string, kernelport: number, modulename?:string, requestTimeout = 1000, logLevel=LogLevel.Warning) {
+	constructor(/*kernelhost: string,*/ kernelport: number, modulename?:string, requestTimeout = 1000, logLevel=LogLevel.Warning) {
 		this.requestTimeout = requestTimeout;
-		this.kernelHostname = kernelhost;
+		/*this.kernelHostname = kernelhost;*/
 		this.kernelPort = kernelport;
 		this.modulename = modulename;
 		this.logLevel = logLevel;
+		this.pendingMessages = new Map<string, (value: ResponseArray | PromiseLike<ResponseArray>) => void>();
 	}
 
 	/**
@@ -52,26 +57,24 @@ export default class EventHandler {
 				process.exit(code); //Do not prevent any kind of user induced shutdown 
 			});//Arrow function to preserve class context
 		})
-
+		
 		EventHandler.instance = this;
 
 		return new Promise<void>((resolve)=>{ // Init client for incoming messages
-			var stream = net.connect(this.kernelPort, this.kernelHostname);
+			var stream = net.connect(this.kernelPort/*, this.kernelHostname*/);
 			this.secStream = peer(stream, true);
-			this.secStream.write({ 
+			this.secStream.write(JSON.stringify({ 
 				modulename: this.modulename,
 				eventname: "kernel/init",
 				timeout: this.requestTimeout,
 				payload: {}
-			});
-			this.secStream.end();
-			let body = '';
-			this.secStream.on('data', chunk => { //convert chunk buffers to string
-				body += chunk.toString();
-			});
-			this.secStream.on('end', async () => { //process finished data
+			}));
+
+			this.secStream.on('data', async (body) => { //convert chunk buffers to string
 				const data: Eventdata = JSON.parse(body);
 				body = ""; //reset body
+				if(!data)
+                    return;
 				const eventname = data.eventname;						
 				if (!this.bindings.has(eventname)) //if there is no event, don't process
 					return;
@@ -83,8 +86,7 @@ export default class EventHandler {
 					detailedstatus: unfinished==0? "" : DetailedStatus.PARTIAL_TIMEOUT+"|"+unfinished,
 					content: results
 				}
-				this.secStream.write(JSON.stringify(processedResults)); //return results
-				this.secStream.end();
+				this.secStream.write(JSON.stringify(processedResults), ()=>this.secStream.end()); //return results
 			});
 		})
 	}
@@ -107,7 +109,7 @@ export default class EventHandler {
 	 * @returns All responses
 	 */
 	requestCustomTimeout(eventname: string, timeout: number, payload: unknown = {}): Promise<ResponseArray> {
-		return this.doRequest(this.kernelHostname, this.kernelPort, eventname, "POST", {}, {
+		return this.doRequest(this.secStream, eventname, {
 			modulename: this.modulename,
 			timeout: timeout,
 			payload: payload
@@ -122,11 +124,11 @@ export default class EventHandler {
 	 * @returns All responses 
 	 */
 	private requestInternal(eventname: string, timeout: number, payload: unknown = {}): Promise<ResponseArray>{
-		return this.doRequest(this.kernelHostname, this.kernelPort, eventname, "POST", {}, {
+		return this.doRequest(this.secStream, eventname, {
 			modulename: this.modulename,
 			timeout: timeout,
 			payload: payload
-		}, null);
+		});
 	}
 
 	/**
@@ -177,10 +179,10 @@ export default class EventHandler {
 		[`beforeExit`, `SIGINT`, `SIGUSR1`, `SIGUSR2`, `uncaughtException`, `SIGTERM`].forEach((eventType) => { //remove listeners to allow the process to stop
 			process.off(eventType, () => this.dispose);//Arrow function to preserve class context
 		})
-		this.secStream.close(); //Close server for incoming messages
 		this.bindings.clear(); //Remove all bindings
 		try {
 			await this.request("kernel/dispose"); //Notify kernel of dispose
+			this.secStream.destroy(); //Close server for incoming messages
 		} catch (e) {
 			console.error(e); 
 		}
@@ -210,54 +212,28 @@ export default class EventHandler {
 
 	/**
 	 * Wraps all internal Request/Response Logics for easy use
-	 * @param hostname Hostname to request
-	 * @param port Specify Port to request
+	 * @param SecStream The secured noise-peer stream
 	 * @param path The path to request
-	 * @param method HTTP Method (usually POST)
-	 * @param headers HTTP Headers
-	 * @param body HTTP Body (usually payload)
+	 * @param payload JSON payload
 	 * @param logger parameter to prevent Loops/Deadlocks
 	 * @returns The Responses from the kernel/the modules
 	 */
-	private doRequest(hostname: string, port: number, path: string, method: string, headers: https.OutgoingHttpHeaders, body: unknown, logger = this): Promise<ResponseArray> {
-		return new Promise(function (resolve, reject) {
-			const data = JSON.stringify(body) + "\r\n";
-			headers
-			headers['Content-Type'] = 'application/json';
-			headers['Content-Length'] = data.length;
-			const options: https.RequestOptions = {
-				hostname: hostname,
-				port: port,
-				path: "/" + path,
-				method: method,
-				headers: headers
+	 private doRequest(SecStream: peer.NoisePeer, path: string, payload: unknown, logger = this): Promise<ResponseArray> {
+		let uuid = getUUID()
+		let prm = new Promise<ResponseArray>((resolve, reject) => {
+			this.pendingMessages.set(uuid, resolve);
+			const data: Eventdata = {
+				id: uuid,
+				modulename: 'kernel',
+				eventname: path,
+				timeout: this.requestTimeout,
+				payload: payload
 			}
-
+			logger?.Log(LogLevel.Debug, "Eventhandler wrote: " + JSON.stringify(data));
 			//Prepare request with response logic
-			const req = https.request(options, res => {
-				let body = '';
-				res.on('data', chunk => { //convert chunk buffers to string
-					body += chunk.toString(); 
-				});
-				res.on('end', () => { //process data
-					logger?.Log(LogLevel.Debug, "Eventhandler got Response: " + JSON.stringify(body));
-					resolve(new ResponseArray(...(body != "" ? JSON.parse(body) : []))); //return kernel results to caller
-					body = "";//reset body
-				})
-			})
-
-			req.on('error', error => {
-				console.error(error)
-				reject(error);
-			})
-
-			if (method !== "GET") {
-				logger?.Log(LogLevel.Debug, "Eventhandler wrote: " + JSON.stringify(data));		
-				req.write(data); //write data to kernel
-			}
-			//End request
-			req.end();
+			SecStream.write(JSON.stringify(data));
 		});
+		return prm;
 	}
 
 	static getInstance() {
