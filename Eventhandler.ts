@@ -48,7 +48,7 @@ export default class EventHandler {
 	/**
 	 * Initializes the eventhandler
 	 */
-	init(): Promise<void> {
+	init(): Promise<ResponseArray> {
 		//Dispose Logic for shutdowns
 		[`beforeExit`, `SIGINT`, `SIGUSR1`, `SIGUSR2`, `uncaughtException`, `SIGTERM`].forEach((eventType) => {
 			process.on(eventType, async (code) => {
@@ -60,35 +60,39 @@ export default class EventHandler {
 		
 		EventHandler.instance = this;
 
-		return new Promise<void>((resolve)=>{ // Init client for incoming messages
-			var stream = net.connect(this.kernelPort/*, this.kernelHostname*/);
-			this.secStream = peer(stream, true);
-			this.secStream.write(JSON.stringify({ 
-				modulename: this.modulename,
-				eventname: "kernel/init",
-				timeout: this.requestTimeout,
-				payload: {}
-			}));
+		var stream = net.connect(this.kernelPort/*, this.kernelHostname*/);
+		this.secStream = peer(stream, true);
+		
+		
+		this.secStream.on('data', async (body) => { //convert chunk buffers to string
+			console.log("Data3");
+			const data: Eventdata = JSON.parse(body);
+			body = ""; //reset body
+			if(!data)
+				return;
 
-			this.secStream.on('data', async (body) => { //convert chunk buffers to string
-				const data: Eventdata = JSON.parse(body);
-				body = ""; //reset body
-				if(!data)
-                    return;
-				const eventname = data.eventname;						
-				if (!this.bindings.has(eventname)) //if there is no event, don't process
-					return;
-				const [results, unfinished] = await this.bindings.get(eventname).invokeAsync(data.timeout, data.payload); //invoke subscribed functions
-				const processedResults: Response = { //pack results
-					id: data.id,
-					modulename: this.modulename,
-					statuscode: unfinished==0?200:207,
-					detailedstatus: unfinished==0? "" : DetailedStatus.PARTIAL_TIMEOUT+"|"+unfinished,
-					content: results
-				}
-				this.secStream.write(JSON.stringify(processedResults), ()=>this.secStream.end()); //return results
-			});
-		})
+			if(this.pendingMessages.has(data.id))
+			{
+				this.pendingMessages.get(data.id).apply(null, [new ResponseArray(...(data.payload as Array<Response>))]);
+				this.pendingMessages.delete(data.id);
+				return;
+			}
+
+			const eventname = data.eventname;						
+			if (!this.bindings.has(eventname)) //if there is no event, don't process
+				return;
+			const [results, unfinished] = await this.bindings.get(eventname).invokeAsync(data.timeout, data.payload); //invoke subscribed functions
+			const processedResults: Response = { //pack results
+				id: data.id,
+				modulename: this.modulename,
+				statuscode: unfinished==0?200:207,
+				detailedstatus: unfinished==0? "" : DetailedStatus.PARTIAL_TIMEOUT+"|"+unfinished,
+				content: results
+			}
+			this.secStream.write(JSON.stringify(processedResults)); //return results
+		});
+
+		return this.doRequest(this.secStream, "kernel/init", this.requestTimeout, {});// Init client for incoming messages
 	}
 
 	/**
@@ -109,11 +113,7 @@ export default class EventHandler {
 	 * @returns All responses
 	 */
 	requestCustomTimeout(eventname: string, timeout: number, payload: unknown = {}): Promise<ResponseArray> {
-		return this.doRequest(this.secStream, eventname, {
-			modulename: this.modulename,
-			timeout: timeout,
-			payload: payload
-		});
+		return this.doRequest(this.secStream, eventname, timeout, payload);
 	}
 
 	/**
@@ -124,11 +124,7 @@ export default class EventHandler {
 	 * @returns All responses 
 	 */
 	private requestInternal(eventname: string, timeout: number, payload: unknown = {}): Promise<ResponseArray>{
-		return this.doRequest(this.secStream, eventname, {
-			modulename: this.modulename,
-			timeout: timeout,
-			payload: payload
-		});
+		return this.doRequest(this.secStream, eventname, timeout, payload);
 	}
 
 	/**
@@ -143,7 +139,7 @@ export default class EventHandler {
 			this.request("kernel/subscribe", {
 				eventname: eventname
 			});
-		}			
+		}
 		this.bindings.get(eventname).bind(func, classcontext);
 	}
 
@@ -218,15 +214,15 @@ export default class EventHandler {
 	 * @param logger parameter to prevent Loops/Deadlocks
 	 * @returns The Responses from the kernel/the modules
 	 */
-	 private doRequest(SecStream: peer.NoisePeer, path: string, payload: unknown, logger = this): Promise<ResponseArray> {
+	 private doRequest(SecStream: peer.NoisePeer, path: string, timeout:number, payload: unknown, logger = this): Promise<ResponseArray> {
 		let uuid = getUUID()
 		let prm = new Promise<ResponseArray>((resolve, reject) => {
 			this.pendingMessages.set(uuid, resolve);
 			const data: Eventdata = {
 				id: uuid,
-				modulename: 'kernel',
+				modulename: this.modulename,
 				eventname: path,
-				timeout: this.requestTimeout,
+				timeout: timeout,
 				payload: payload
 			}
 			logger?.Log(LogLevel.Debug, "Eventhandler wrote: " + JSON.stringify(data));
