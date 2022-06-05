@@ -65,7 +65,6 @@ export default class EventHandler {
 		
 		
 		this.secStream.on('data', async (body) => { //convert chunk buffers to string
-			console.log("Data3");
 			const data: Eventdata = JSON.parse(body);
 			body = ""; //reset body
 			if(!data)
@@ -73,7 +72,7 @@ export default class EventHandler {
 
 			if(this.pendingMessages.has(data.id))
 			{
-				this.pendingMessages.get(data.id).apply(null, [new ResponseArray(...(data.payload as Array<Response>))]);
+				this.pendingMessages.get(data.id).apply(null, [new ResponseArray(...((data.payload??[]) as Array<Response>))]);
 				this.pendingMessages.delete(data.id);
 				return;
 			}
