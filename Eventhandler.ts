@@ -5,6 +5,7 @@ import { v4 as getUUID } from 'uuid';
 import Delegate from './Utils/Delegate/Delegate';
 import { DetailedStatus } from './Utils/enums/DetailedStatus';
 import { LogLevel } from './Utils/enums/LogLevel';
+import { Configdata } from './Utils/interfaces/Configdata';
 import { Eventdata } from './Utils/interfaces/Eventdata';
 import { Response } from './Utils/interfaces/Response';
 import { ResponseArray } from './Utils/interfaces/ResponseArray';
@@ -12,14 +13,13 @@ import { ResponseArray } from './Utils/interfaces/ResponseArray';
 
 export default class EventHandler {
 	private modulename: string;
-	private requestTimeout: number;
+	private config: Configdata;
 	private bindings: Map<string, Delegate<(...args) => unknown>> = new Map();
 
 	/*private kernelHostname: string;*/
 	private kernelPort: number;
 
 	private secStream: peer.NoisePeer;
-	private logLevel: LogLevel;
 
 	private pendingMessages: Map<string, (value: ResponseArray | PromiseLike<ResponseArray>) => void>;
 	
@@ -36,12 +36,11 @@ export default class EventHandler {
 	 * @param requestTimeout optional - timeout in milliseconds
 	 * @param logLevel optional - provide a custom loglevel
 	 */
-	constructor(/*kernelhost: string,*/ kernelport: number, modulename?:string, requestTimeout = 1000, logLevel=LogLevel.Warning) {
-		this.requestTimeout = requestTimeout;
+	constructor(/*kernelhost: string,*/ kernelport: number, config: Configdata, modulename?:string) {
+		this.config = config;
 		/*this.kernelHostname = kernelhost;*/
 		this.kernelPort = kernelport;
 		this.modulename = modulename;
-		this.logLevel = logLevel;
 		this.pendingMessages = new Map<string, (value: ResponseArray | PromiseLike<ResponseArray>) => void>();
 	}
 
@@ -91,7 +90,7 @@ export default class EventHandler {
 			this.secStream.write(JSON.stringify(processedResults)); //return results
 		});
 
-		return this.doRequest(this.secStream, "kernel/init", this.requestTimeout, {});// Init client for incoming messages
+		return this.doRequest(this.secStream, "kernel/init", this.config.timeout, {});// Init client for incoming messages
 	}
 
 	/**
@@ -101,7 +100,7 @@ export default class EventHandler {
 	 * @returns All responses
 	 */
 	request(eventname: string, payload: unknown = {}): Promise<ResponseArray> {
-		return this.requestCustomTimeout(eventname, this.requestTimeout, payload);
+		return this.requestCustomTimeout(eventname, this.config.timeout, payload);
 	}
 
 	/**
@@ -197,10 +196,10 @@ export default class EventHandler {
 	 * @param content The message to write
 	 */
 	async Log(logLevel: LogLevel, content: string): Promise<void> {
-		if (logLevel < this.logLevel)
+		if (logLevel < this.config.loglevel)
 			return;
 
-		this.requestInternal("kernel/log", this.requestTimeout, {
+		this.requestInternal("kernel/log", this.config.timeout, {
 			message: `[${new Date().toISOString()}] ${("[" + LogLevel[logLevel] + "]").padEnd(9, " ")} [${this.modulename}] ${content}`
 		})
 	}
@@ -219,6 +218,7 @@ export default class EventHandler {
 			this.pendingMessages.set(uuid, resolve);
 			const data: Eventdata = {
 				id: uuid,
+				pass: this.config.pass,
 				modulename: this.modulename,
 				eventname: path,
 				timeout: timeout,
